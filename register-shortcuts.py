@@ -64,6 +64,11 @@ SHORTCUTS = [
     ("Mozeidon Google Meet",
      "<Super><Alt><Ctrl>m",
      f'{PICKER} reuse "Google Meet - Work"'),
+
+    # hyper+w → WhatsApp (kanata: multi lmet lalt lctl w)
+    ("Mozeidon WhatsApp",
+     "<Super><Alt><Ctrl>w",
+     f'{PICKER} reuse "WhatsApp"'),
 ]
 
 PREFIX = "Mozeidon"  # pro identifikaci našich zkratek při --remove
