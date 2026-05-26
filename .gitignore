@@ -1,0 +1,9 @@
+# jiné repo — má vlastní .git
+.hammerspoon/
+
+# python cache
+__pycache__/
+*.pyc
+
+# claude session data
+.claude/
