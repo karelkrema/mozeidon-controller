@@ -499,7 +499,7 @@ def _order_prefix(item: dict) -> str:
 
 
 class Overlay:
-    def __init__(self):
+    def __init__(self, daemon_mode: bool = False):
         try:
             import tkinter as tk
             import tkinter.font as tkfont
@@ -507,36 +507,25 @@ class Overlay:
             print("tkinter not available. Install python3-tk.", file=sys.stderr)
             sys.exit(1)
 
-        self._tk     = tk
-        self._tkfont = tkfont
+        self._tk        = tk
+        self._tkfont    = tkfont
+        self.daemon_mode = daemon_mode
 
         self.root = tk.Tk()
         self.root.withdraw()
 
-        # search state
-        self.query     = ""
-        self.sel       = 0
-        self.scroll    = 0
-        self.tabs      = None
-        self.bookmarks = None
-        self.registry  = load_registry()
-        self.results   : list = []
-
-        # order-input mode
-        self.mode      = "search"
-        self.ord_input = ""
-        self.ord_item  = None
-
-        self._setup_window()
+        self._reset_state()
+        self._setup_window(show=not daemon_mode)
         self._setup_fonts()
         self._setup_widgets()
         self.root.bind("<KeyPress>", self._on_key)
         self._render()
-        threading.Thread(target=self._bg_fetch, daemon=True).start()
+        if not daemon_mode:
+            threading.Thread(target=self._bg_fetch, daemon=True).start()
 
     # ── window ──────────────────────────────────────────────────────────────
 
-    def _setup_window(self):
+    def _setup_window(self, show: bool = True):
         root = self.root
         root.title("Mozeidon")
         root.configure(bg=COLORS["bg"])
@@ -546,17 +535,22 @@ class Overlay:
             root.attributes("-alpha", 0.97)
         root.attributes("-topmost", True)
 
-        mx, my, mw, mh = _active_monitor_geometry(root)
+        self._reposition()
+        if show:
+            self._focus()
+
+    def _reposition(self):
+        """Recalculate geometry for the monitor currently holding the cursor."""
+        mx, my, mw, mh = _active_monitor_geometry(self.root)
         w = int(mw * 0.82)
         h = int(mh * 0.82)
-        x = mx + (mw - w) // 2
-        y = my + (mh - h) // 2
-        root.geometry(f"{w}x{h}+{x}+{y}")
+        self.root.geometry(f"{w}x{h}+{mx + (mw - w) // 2}+{my + (mh - h) // 2}")
         self._w, self._h = w, h
 
-        root.deiconify()
-        root.lift()
-        root.focus_force()
+    def _focus(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
 
     def _setup_fonts(self):
         tkf = self._tkfont
@@ -819,8 +813,37 @@ class Overlay:
         path = str(REGISTRY_PATH)
         subprocess.Popen(["open" if IS_MACOS else "xdg-open", path])
 
+    def _reset_state(self):
+        self.query     = ""
+        self.sel       = 0
+        self.scroll    = 0
+        self.tabs      = None
+        self.bookmarks = None
+        self.registry  = load_registry()
+        self.results   = []
+        self.mode      = "search"
+        self.ord_input = ""
+        self.ord_item  = None
+
+    def _show(self):
+        """Show overlay (daemon mode): reposition, reset state, fetch fresh data."""
+        self._reset_state()
+        self._reposition()
+        self._render()          # shows "Loading…" immediately
+        self._focus()
+        threading.Thread(target=self._bg_fetch, daemon=True).start()
+
+    def _toggle_visibility(self):
+        if self.root.state() == "withdrawn":
+            self._show()
+        else:
+            self._dismiss()
+
     def _dismiss(self):
-        self.root.destroy()
+        if self.daemon_mode:
+            self.root.withdraw()
+        else:
+            self.root.destroy()
 
     # ── key handler ──────────────────────────────────────────────────────────
 
@@ -887,35 +910,69 @@ class Overlay:
 
     def run(self):
         signal.signal(signal.SIGTERM,
-                      lambda *_: self.root.after(0, self._dismiss))
-        # Periodic no-op so Python checks pending signals between Tcl events
+                      lambda *_: self.root.after(0, self.root.destroy))
+        if self.daemon_mode:
+            signal.signal(signal.SIGUSR1,
+                          lambda *_: self.root.after(0, self._toggle_visibility))
         self._heartbeat()
         self.root.mainloop()
 
 
-# ─── Single-instance lock ────────────────────────────────────────────────────
+# ─── Single-instance lock & daemon ──────────────────────────────────────────
 
-LOCK_FILE = Path("/tmp/mozeidon-picker.lock")
+LOCK_FILE   = Path("/tmp/mozeidon-picker.lock")
+DAEMON_FILE = Path("/tmp/mozeidon-picker-daemon.pid")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _read_pid(path: Path):
+    try:
+        return int(path.read_text().strip())
+    except Exception:
+        return None
 
 
 def _check_lock() -> bool:
-    """Return True if we should launch. False = another instance is alive (and was killed = toggle)."""
+    """Return True if we should launch. False = another instance alive (killed = toggle)."""
     if LOCK_FILE.exists():
-        try:
-            pid = int(LOCK_FILE.read_text().strip())
-            os.kill(pid, 0)          # raises if process is gone
-            os.kill(pid, signal.SIGTERM)  # alive → kill it (toggle/dismiss)
+        pid = _read_pid(LOCK_FILE)
+        if pid and _pid_alive(pid):
+            os.kill(pid, signal.SIGTERM)
             return False
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass                     # stale lock — proceed
     LOCK_FILE.write_text(str(os.getpid()))
     atexit.register(lambda: LOCK_FILE.unlink(missing_ok=True))
     return True
 
 
+def cmd_daemon():
+    """Start overlay as a persistent background daemon. SIGUSR1 toggles visibility."""
+    # Terminate any existing daemon first
+    if DAEMON_FILE.exists():
+        pid = _read_pid(DAEMON_FILE)
+        if pid and _pid_alive(pid):
+            os.kill(pid, signal.SIGTERM)
+    DAEMON_FILE.write_text(str(os.getpid()))
+    atexit.register(lambda: DAEMON_FILE.unlink(missing_ok=True))
+    Overlay(daemon_mode=True).run()
+
+
 def cmd_overlay():
+    # If daemon is running, toggle it via SIGUSR1 — no new process needed
+    if DAEMON_FILE.exists():
+        pid = _read_pid(DAEMON_FILE)
+        if pid and _pid_alive(pid):
+            os.kill(pid, signal.SIGUSR1)
+            return
+    # No daemon → single-instance overlay
     if not _check_lock():
-        return          # another instance was running; we killed it → done
+        return
     Overlay().run()
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
@@ -924,6 +981,8 @@ def main():
     argv = sys.argv[1:]
     if not argv or argv[0] == "overlay":
         cmd_overlay()
+    elif argv[0] == "daemon":
+        cmd_daemon()
     elif argv[0] == "reuse":
         if len(argv) < 2:
             print("usage: picker.py reuse <name>", file=sys.stderr)
@@ -932,7 +991,7 @@ def main():
     elif argv[0] == "reorder":
         cmd_reorder()
     else:
-        print("usage: picker.py [overlay | reuse <name> | reorder]", file=sys.stderr)
+        print("usage: picker.py [overlay | daemon | reuse <name> | reorder]", file=sys.stderr)
         sys.exit(1)
 
 
