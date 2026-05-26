@@ -69,6 +69,11 @@ SHORTCUTS = [
     ("Mozeidon WhatsApp",
      "<Super><Alt><Ctrl>w",
      f'{PICKER} reuse "WhatsApp"'),
+
+    # hyper+a → Akiflow (kanata: multi lmet lalt lctl a)
+    ("Mozeidon Akiflow",
+     "<Super><Alt><Ctrl>a",
+     f'{PICKER} reuse "Akiflow"'),
 ]
 
 PREFIX = "Mozeidon"  # pro identifikaci našich zkratek při --remove
