@@ -952,28 +952,33 @@ def _check_lock() -> bool:
 
 
 def cmd_daemon():
-    """Start overlay as a persistent background daemon. SIGUSR1 toggles visibility."""
-    # Terminate any existing daemon first
+    """Persistent daemon — called by cmd_overlay on first use, or manually."""
     if DAEMON_FILE.exists():
         pid = _read_pid(DAEMON_FILE)
         if pid and _pid_alive(pid):
             os.kill(pid, signal.SIGTERM)
     DAEMON_FILE.write_text(str(os.getpid()))
     atexit.register(lambda: DAEMON_FILE.unlink(missing_ok=True))
-    Overlay(daemon_mode=True).run()
+    app = Overlay(daemon_mode=True)
+    app._show()   # visible immediately — user just pressed the shortcut
+    app.run()
 
 
 def cmd_overlay():
-    # If daemon is running, toggle it via SIGUSR1 — no new process needed
+    # Daemon already running → toggle visibility
     if DAEMON_FILE.exists():
         pid = _read_pid(DAEMON_FILE)
         if pid and _pid_alive(pid):
             os.kill(pid, signal.SIGUSR1)
             return
-    # No daemon → single-instance overlay
-    if not _check_lock():
-        return
-    Overlay().run()
+    # First invocation — spawn daemon as detached background process and exit.
+    # The daemon starts with window visible (cmd_daemon calls _show on startup).
+    subprocess.Popen(
+        [sys.executable, __file__, "daemon"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 

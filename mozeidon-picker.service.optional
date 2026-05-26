@@ -1,0 +1,14 @@
+[Unit]
+Description=Mozeidon Picker daemon (persistent overlay)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=python3 /home/elk/scripts/mozeidon/picker.py daemon
+Restart=on-failure
+RestartSec=3
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+
+[Install]
+WantedBy=graphical-session.target
