@@ -104,6 +104,36 @@ def _matcher(entry: dict) -> dict:
     return entry.get("matcher") or {"type": "exact", "value": entry.get("url", "")}
 
 
+_LUA_CLASSES = {
+    'd': r'[0-9]',   'D': r'[^0-9]',
+    'a': r'[A-Za-z]','A': r'[^A-Za-z]',
+    'l': r'[a-z]',   'L': r'[^a-z]',
+    'u': r'[A-Z]',   'U': r'[^A-Z]',
+    'w': r'[A-Za-z0-9]', 'W': r'[^A-Za-z0-9]',
+    's': r'[ \t\n\r\f\v]',
+    'x': r'[0-9A-Fa-f]',
+}
+
+def _lua_to_re(pat: str) -> str:
+    """Convert Lua string.find pattern (%-escapes) to Python regex."""
+    out, i = [], 0
+    while i < len(pat):
+        c = pat[i]
+        if c == '%' and i + 1 < len(pat):
+            nc = pat[i + 1]
+            if nc in _LUA_CLASSES:
+                out.append(_LUA_CLASSES[nc])
+            elif nc == '%':
+                out.append('%')
+            else:
+                out.append(re.escape(nc))  # %( → \(, %. → \., etc.
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
 def tab_matches(url: str, matcher: dict) -> bool:
     t, v = matcher.get("type", "exact"), matcher.get("value", "")
     if t == "exact":
@@ -112,7 +142,7 @@ def tab_matches(url: str, matcher: dict) -> bool:
         return v in url
     if t == "regex":
         try:
-            return bool(re.search(v, url))
+            return bool(re.search(_lua_to_re(v), url))
         except re.error:
             return False
     return False
